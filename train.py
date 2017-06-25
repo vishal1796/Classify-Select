@@ -57,7 +57,7 @@ def build_embeddingmatrix(word_index):
         if embedding_vector is not None:
             embedding_matrix[i] = embedding_vector
 
-    return embedding_vector
+    return embedding_matrix
 
 def vectorize(X, yi, y, word_idx):
     tokenizer = Tokenizer()
