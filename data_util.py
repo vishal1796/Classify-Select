@@ -1,9 +1,5 @@
 import os
 import numpy
-from keras.preprocessing.text import Tokenizer
-from keras.preprocessing.sequence import pad_sequences
-from keras.layers import Embedding
-
 
 def encode_utf8(sentence):
     if isinstance(sentence, unicode):
@@ -17,6 +13,7 @@ def get_data(mode):
     path="/summary/neuralsum"
     all_document = []
     all_labels = []
+    
     if mode == 'train':
         fname = ['dailymail/training/']
     if mode == 'validation':
@@ -59,50 +56,3 @@ def get_data(mode):
                 all_labels.append(labellist)
 
     return all_document, all_labels
-
-
-def build_vocab(all_document):
-    vocab = []
-    for document in all_document:
-        for sentence in document:
-            vocab.append(sentence)
-    return vocab
-
-def build_embeddingmatrix(X):
-    vocab = build_vocab(X)
-
-    print "Tokenizing input sequence"
-    tokenizer = Tokenizer()
-    tokenizer.fit_on_texts(vocab)
-    word_index = tokenizer.word_index
-    print "Found %s unique tokens." % len(word_index)
-
-
-    for index, texts in enumerate(X):    
-        sequences = tokenizer.texts_to_sequences(texts)
-        data = pad_sequences(sequences, maxlen=50, dtype='int32',padding='post', truncating='post', value=0)
-        X[index] = data
-
-    embeddings_index = {}
-    f = open(os.path.join('/glove/', 'glove.6B.100d.txt'))
-    for line in f:
-        values = line.split()
-        word = values[0]
-        coefs = numpy.asarray(values[1:], dtype='float32')
-        embeddings_index[word] = coefs
-    f.close()
-
-    print('Found %s word vectors.' % len(embeddings_index))
-
-
-    embedding_matrix = numpy.zeros((len(word_index) + 1, 100))
-    for word, i in word_index.items():
-        embedding_vector = embeddings_index.get(word)
-        if embedding_vector is not None:
-            embedding_matrix[i] = embedding_vector
-
-    return embedding_vector, len(word_index)
-
-
-
-
