@@ -1,8 +1,4 @@
-import os
-import cPickle
 import numpy
-from keras.preprocessing.text import Tokenizer
-from keras.preprocessing.sequence import pad_sequences
 from keras.layers import Input, Activation
 from keras.layers.pooling import AveragePooling1D
 from keras.layers.embeddings import Embedding
@@ -13,44 +9,64 @@ from keras.layers.merge import Dot, Concatenate, Add
 from keras.optimizers import Adam
 from keras.models import Model
 from keras import backend as K
+from keras.callbacks import ModelCheckpoint, EarlyStopping
+from data_util import build_embeddingmatrix, get_data
+from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score
 from copy import deepcopy
-from keras.utils import to_categorical
-from nltk.tokenize import sent_tokenize
+from rouge import Rouge
 
 
-def get_word2id(mode):
-    assert mode == 'test'
-    word_index = cPickle.load(open('./jitender/word_index.p', 'rb'))
-    return word_index
+rouge = Rouge()
 
-def build_embeddingmatrix(word_index):
-    embeddings_index = {}
-    f = open(os.path.join('../glove', 'glove.6B.100d.txt'))
-    for line in f:
-        values = line.split()
-        word = values[0]
-        coefs = numpy.asarray(values[1:], dtype='float32')
-        embeddings_index[word] = coefs
-    f.close()
-    print('Found %s word vectors.' % len(embeddings_index))
+def calc_rogue(X, y, y_pred):
+    assert len(X) == len(y)
+    assert len(X) == len(y_pred)
+    rouge_1 = []
+    rouge_2 = []
+    rouge_l = []
 
-    embedding_matrix = numpy.zeros((len(word_index) + 1, 100))
-    for word, i in word_index.items():
-        embedding_vector = embeddings_index.get(word)
-        if embedding_vector is not None:
-            embedding_matrix[i] = embedding_vector
+    for i in range(len(X)):
+        reference_summary = ""
+        system_summary = ""
+        for (sentence, label) in (zip(X[i], y[i])):
+            if label == 1:
+                reference_summary = reference_summary + " " + sentence
 
-    return embedding_matrix
-
-def vectorize(X, word_idx):
-    tokenizer = Tokenizer()
-    tokenizer.word_index = word_index
-    for index, text in enumerate(X):
-        sequences = tokenizer.texts_to_sequences(text)
-        data = pad_sequences(sequences, maxlen=50, dtype='int32',padding='post', truncating='post', value=0)
-        X[index] = data
+        for (sentence, label) in (zip(X[i], y_pred[i])):
+            if label == 1:
+                system_summary = system_summary + " " + sentence 
         
-    return numpy.array(X)
+        reference_summary = reference_summary.strip()
+        system_summary = system_summary.strip()
+        score = rouge.get_scores(reference_summary, system_summary)
+        rouge_1.append(score[0]['rouge-1']['f'])
+        rouge_2.append(score[0]['rouge-2']['f'])
+        rouge_l.append(score[0]['rouge-l']['f'])
+
+    avg_r1 =  float(sum(rouge_1)) / len(rouge_1)
+    avg_r2 =  float(sum(rouge_2)) / len(rouge_2)
+    avg_rl =  float(sum(rouge_l)) / len(rouge_l)
+
+    return avg_r1, avg_r2, avg_rl
+
+
+def precision_recall(y_true, y_pred):
+    p = []
+    r = []
+    f = []
+    a = []
+    for i in range(len(y_true)):
+        p.append(precision_score(y_true[i], y_pred[i]))
+        r.append(recall_score(y_true[i], y_pred[i]))
+        f.append(f1_score(y_true[i], y_pred[i]))
+        a.append(accuracy_score(y_true[i], y_pred[i]))
+    
+    avg_p =  float(sum(p)) / len(p)
+    avg_r =  float(sum(r)) / len(r)
+    avg_f =  float(sum(f)) / len(f)
+    avg_a =  float(sum(a)) / len(a)
+    
+    return avg_p, avg_r, avg_f, avg_a
 
 
 MAX_SEQUENCE_LENGTH = 50
@@ -60,10 +76,12 @@ EMBEDDING_DIM = 100
 TIMESTAMP_1 = MAX_SEQUENCE_LENGTH
 TIMESTAMP_2 = MAX_SENTENCE
 
-word_index = get_word2id('test')
-embedding_matrix = build_embeddingmatrix(word_index)
+X_test, y = get_data('test')
+X = deepcopy(X_test)
 
-embedding_layer = Embedding(len(word_index) + 1, EMBEDDING_DIM, weights=[embedding_matrix], input_length=MAX_SEQUENCE_LENGTH, trainable=False)
+embedding_matrix, len_word_index = build_embeddingmatrix(X_test)
+
+embedding_layer = Embedding(len_word_index + 1, EMBEDDING_DIM, weights=[embedding_matrix], input_length=MAX_SEQUENCE_LENGTH, trainable=False)
 main_input = Input(shape=(MAX_SENTENCE, MAX_SEQUENCE_LENGTH), dtype='float32', name="main_input")
 sequence_input = TimeDistributed(embedding_layer, name="sequence_input")(main_input)
 gru = GRU(HIDDEN_SIZE, return_sequences=True, kernel_initializer='glorot_uniform')
@@ -109,51 +127,33 @@ for j in range(MAX_SENTENCE):
         p_prime = Reshape((1,2))(p)
         prob = Concatenate(axis=1)([prob, p_prime])
 
+
 model = Model(inputs=main_input, outputs=prob)
-model.load_weights("./jitender/model_weight_final.h5", by_name=True)
+model.load_weights('/model_weight/model_weight.h5', by_name=True)
 
 
-def encode_utf8(sentence):
-    if isinstance(sentence, unicode):
-        sentence = sentence.encode("ascii", "ignore").decode("ascii")
-    if isinstance(sentence, str):
-        sentence = sentence.decode("ascii", "ignore").encode("ascii")
-    sentence = sentence.encode('utf-8')
-    return sentence
+X_val, y_val = get_dataa('validation')
+X_val, y_val = X_val[0:5000], y_val[0:5000]
+XX = deepcopy(X_val)
 
-def remove_punctuation(sentence):
-    punctuation = '!"#$%&\()*+,-./:;<=>?@[\\]^_`{|}~'
-    sentence = sentence.translate(string.maketrans("",""), punctuation)
-    return sentence
+matrix, len_vector = build_matrix(X_val)
+X_val = numpy.array(X_val)
+y_pred = model.predict(X_val, batch_size=32)
+
+result = []
+for idx, yy in enumerate(y_pred):
+    rslt = list(yy.argmax(1))
+    result.append(rslt)
+
+print "Prediction on test data completed"
+
+r1, r2, rl = calc_rogue(XX, y_val, result)
+print "ROUGE:"
+print r1, r2, rl
 
 
-text = open('Anil.txt').read()
-text = encode_utf8(text)
-text = text.replace('\n\n', ' ')
-text = text.replace('\'', "")
-sentencelist = sent_tokenize(text)
-
-X = sentencelist
-
-print  len(sentencelist), len(X)
-
-XX = deepcopy(X)
-X_vec = vectorize([XX], word_index)
-y_pred = model.predict(X_vec, batch_size=1)
-
-for idx, yy in enumerate(y_pred):    
-    result = list(yy.argmax(1))
-
-def calc_summary(X, y):
-    assert len(X) == len(y)
-    summary = ""
-    for (sentence, label) in (zip(X, y)):
-        if label == 1:
-            summary = summary + " " + sentence
-
-    return summary.strip()
-
-summary = calc_summary(X, result)
-
-print summary
-print len(sent_tokenize(summary))
+p, r, f, acc = precision_recall(y_val, result)
+print "PRECISION_RECALL:"
+print p, r, f
+print "ACCURACY:"
+print acc
